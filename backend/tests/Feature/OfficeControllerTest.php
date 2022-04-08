@@ -20,7 +20,7 @@ class OfficeControllerTest extends TestCase
     {
         Office::factory(3)->create();
         $response = $this->get('/api/offices');
-        $response->dump();
+        // $response->dump();
 
 
         $response->assertOk();
@@ -49,7 +49,7 @@ class OfficeControllerTest extends TestCase
 
     /** @test */
 
-    public function itFiltersByHostId()
+    public function itFiltersByUserId()
     {
         Office::factory(3)->create();
 
@@ -57,7 +57,7 @@ class OfficeControllerTest extends TestCase
 
         $office = Office::factory()->for($host)->create();
 
-        $response = $this->get('/api/offices?host_id=' . $host->id);
+        $response = $this->get('/api/offices?user_id=' . $host->id);
 
 
         $response->assertOk();
@@ -68,7 +68,7 @@ class OfficeControllerTest extends TestCase
 
     /** @test */
 
-    public function itFiltersByUserId()
+    public function itFiltersByVisitorId()
     {
         Office::factory(3)->create();
 
@@ -79,7 +79,7 @@ class OfficeControllerTest extends TestCase
         Reservation::factory()->for(Office::factory())->create();
         Reservation::factory()->for($office)->for($user)->create();
 
-        $response = $this->get('/api/offices?user_id=' . $user->id);
+        $response = $this->get('/api/offices?visitor_id=' . $user->id);
 
 
         $response->assertOk();
@@ -99,7 +99,6 @@ class OfficeControllerTest extends TestCase
 
         $office->tags()->attach($tag);
         $office->images()->create(['path' => 'image.jpg']);
-
         $response = $this->get('/api/offices');
 
 
