@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\User;
 use App\Models\Office;
 use App\Models\Reservation;
 use Illuminate\Support\Arr;
@@ -10,7 +11,12 @@ use Illuminate\Http\Response;
 use Illuminate\Validation\Rule;
 use Illuminate\Support\Facades\DB;
 use App\Http\Resources\OfficeResource;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Database\Eloquent\Builder;
+use App\Models\Validators\OfficeValidator;
+use App\Notifications\OfficePendingApproval;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Validation\ValidationException;
 use Illuminate\Http\Resources\Json\JsonResource;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 
@@ -59,31 +65,22 @@ class OfficeController extends Controller
             abort(Response::HTTP_FORBIDDEN);
         }
 
-        $attributes = validator(
-            request()->all(),
-            [
-                'title' => ['required', 'string'],
-                'description' => ['required', 'string'],
-                'lat' => ['required', 'numeric'],
-                'Ing' => ['required', 'numeric'],
-                'address_line1' => ['required', 'string'],
-                'hidden' => ['bool'],
-                'price_per_day' => ['required', 'integer', 'min:1000'],
-                'monthly_discount' => ['integer', 'min:0'],
-                'tags' => ['array'],
-                'tags.*' => ['integer', Rule::exists('tags', 'id')]
-            ]
-        )->validate();
+        $attributes = (new OfficeValidator())->validate(
+            $office = new Office(),
+            request()->all()
+        );
 
         $attributes['approval_status'] = Office::APPROVAL_PENDING;
+        $attributes['user_id'] = auth()->id;
 
-        $office = DB::transaction(function () use ($attributes) {
-            $office = auth()->user()->offices()->create(
+        $office = DB::transaction(function () use ($office, $attributes) {
+            $office->fill(
                 Arr::except($attributes, ['tags'])
-            );
+            )->save();
 
-            $office->tags()->attach($attributes['tags']);
-
+            if (isset($attributes['tags'])) {
+                $office->tags()->attach($attributes['tags']);
+            }
             return $office;
         });
 
@@ -95,6 +92,58 @@ class OfficeController extends Controller
 
     public function update(Office $office): JsonResource
     {
-        
+        if (!auth()->user()->tokenCan('office.update')) {
+            abort(Response::HTTP_FORBIDDEN);
+        }
+
+        $this->authorize($office);
+
+        $attributes = (new OfficeValidator())->validate(
+            $office,
+            request()->all()
+        );
+        $office->fill(Arr::except($attributes, ['tags']));
+
+        if ($requiresReview = $office->isDirty(['lat', 'lng', 'price_per_day'])) {
+            $office->fill(['approval_status' => Office::APPROVAL_PENDING]);
+        }
+
+        DB::transaction(function () use ($office, $attributes) {
+            $office->save();
+
+            if (isset($attributes['tags'])) {
+                $office->tags()->sync($attributes['tags']);
+            }
+        });
+
+        if ($requiresReview) {
+            Notification::send(User::where('is_admin', true)->get(), new OfficePendingApproval($office));
+        }
+
+        return OfficeResource::make(
+            $office->load(['images', 'tags', 'user'])
+        );
+    }
+
+    public function delete(Office $office)
+    {
+        abort_unless(auth()->user()->tokenCan('office.delete'),
+            Response::HTTP_FORBIDDEN
+        );
+
+        $this->authorize('delete', $office);
+
+        throw_if(
+            $office->reservations()->where('status', Reservation::STATUS_ACTIVE)->exists(),
+            ValidationException::withMessages(['office' => 'Cannot delete this office!'])
+        );
+
+        $office->images()->each(function ($image) {
+            Storage::delete($image->path);
+
+            $image->delete();
+        });
+
+        $office->delete();
     }
 }
